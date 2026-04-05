@@ -1,3 +1,7 @@
+import { BACKEND_URL } from './config'; // adjust path if needed based on your file structure
+import { useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import {
   ReactFlow,
   Background,
@@ -6,126 +10,131 @@ import {
   useNodesState,
   useEdgesState,
   ReactFlowProvider
-} from 'reactflow'
-import 'reactflow/dist/style.css'
+} from 'reactflow';
+import 'reactflow/dist/style.css';
 
-import { useEffect, useState } from 'react'
+import CustomNode from './components/nodes/CustomNode';
+import Inspector from './components/inspector/Inspector';
+import ChartPanel from './components/ChartPanel';
+import MetricsPanel from './components/MetricsPanel';
+import Login from './components/Login';
+import Dashboard from './components/Dashboard';
 
-import CustomNode from './components/nodes/CustomNode'
-import Inspector from './components/inspector/Inspector'
-import ChartPanel from './components/ChartPanel'
-import MetricsPanel from './components/MetricsPanel'
+const nodeTypes = { custom: CustomNode };
 
-const nodeTypes = { custom: CustomNode }
+// Connect to your backend outside the component so it only connects once
+const socket = io('http://localhost:5000'); 
 
 function FlowApp() {
+  // 1. DYNAMICALLY GET THE ID FROM THE URL
+  const { id: PROJECT_ID } = useParams();
+  const token = localStorage.getItem('token');
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
-  const [selectedNode, setSelectedNode] = useState<any>(null)
-  const [selectedEdge, setSelectedEdge] = useState<any>(null)
+  const selectedNode = nodes.find(n => n.selected) || null;
+  const selectedEdge = edges.find(e => e.selected) || null;
 
-  const [history, setHistory] = useState<any[]>([])
-  const [nodeName, setNodeName] = useState("")
-  const [isRunning, setIsRunning] = useState(false)
-  const [showAnalytics, setShowAnalytics] = useState(true)
+  const [history, setHistory] = useState<any[]>([]);
+  const [nodeName, setNodeName] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(true);
 
   // =============================
-  // SIMULATION LOOP
+  // WEBSOCKET SIMULATION LOOP
   // =============================
   useEffect(() => {
-    if (!isRunning) return
+    if (!PROJECT_ID) return;
 
-    const interval = setInterval(() => {
+    socket.emit('join_project', PROJECT_ID);
 
-      setNodes(prevNodes => {
-
-        const nodeMap: any = {}
-        prevNodes.forEach(n => {
-          nodeMap[n.id] = { ...n, incoming: 0 }
-        })
-
-        const updatedEdges = edges.map(e => {
-          const source = nodeMap[e.source]
-          const target = nodeMap[e.target]
-
-          if (!source || !target) return e
-
-          const efficiency = source.data.overloaded ? 0.3 : 1
-          const flow = (source.data.value || 0) * 0.2 * efficiency
-
-          target.incoming += flow
-
-          return {
-            ...e,
-            animated: true,
-            style: {
-              stroke: source.data.overloaded ? '#ef4444' : '#60a5fa',
-              strokeWidth: 2
+    socket.on('tick_update', (data) => {
+      if (data.nodes && data.nodes.length > 0) {
+        
+        // SAFELY merge server data with local user edits!
+        setNodes(currentNodes => {
+          return data.nodes.map((serverNode: any) => {
+            const localNode = currentNodes.find(n => n.id === serverNode.id);
+            
+            // If the user is currently typing in the Inspector, preserve their edits!
+            if (localNode && localNode.data.locked) {
+              return {
+                ...serverNode,
+                data: {
+                  ...serverNode.data,
+                  rate: localNode.data.rate,         // Keep typed rate
+                  capacity: localNode.data.capacity, // Keep typed capacity
+                  label: localNode.data.label,       // Keep typed label
+                  locked: true                       // Keep it locked
+                }
+              };
             }
+            return serverNode; // Not editing? Accept full server data
+          });
+        });
+
+        setEdges(data.edges);
+
+        const snapshot: any = { time: Date.now() };
+        data.nodes.forEach((n: any) => {
+          snapshot[n.id] = n.data.value;
+        });
+        setHistory(prev => [...prev.slice(-25), snapshot]);
+      }
+    });
+
+    return () => {
+      socket.off('tick_update');
+    };
+  }, [PROJECT_ID]);
+
+  // =============================
+  // LOAD INITIAL CANVAS FROM DB
+  // =============================
+  useEffect(() => {
+    const loadProject = async () => {
+      if (!PROJECT_ID || !token) return;
+      
+      try {
+        const res = await fetch(`http://localhost:5000/api/projects/${PROJECT_ID}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
           }
-        })
-
-        setEdges(updatedEdges)
-
-        const updatedNodes = prevNodes.map(node => {
-
-          if (node.data.locked) return node
-
-          let value = node.data.value || 0
-          value += nodeMap[node.id].incoming
-          value += node.data.rate || 0
-
-          const capacity = node.data.capacity || 100
-          const threshold = node.data.overloadThreshold || capacity
-
-          const overloaded = value > threshold
-
-          value = Math.min(value, capacity)
-
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              value: Math.floor(value),
-              overloaded
-            }
-          }
-        })
-
-        const snapshot: any = { time: Date.now() }
-        updatedNodes.forEach(n => {
-          snapshot[n.id] = n.data.value
-        })
-
-        setHistory(prev => [...prev.slice(-25), snapshot])
-
-        return updatedNodes
-      })
-
-    }, 1000)
-
-    return () => clearInterval(interval)
-
-  }, [edges, isRunning])
+        });
+        const data = await res.json();
+        
+        if (data.nodes && data.edges) {
+          setNodes(data.nodes);
+          setEdges(data.edges);
+        }
+      } catch (error) {
+        console.error("Failed to load project:", error);
+      }
+    };
+    
+    loadProject();
+  }, [PROJECT_ID, token]);
 
   // =============================
   // NODE MANAGEMENT
   // =============================
   const createNode = () => {
-    if (!nodeName.trim()) return
+    const finalName = nodeName.trim() ? nodeName : `Node ${nodes.length + 1}`;
 
     const newNode = {
       id: Date.now().toString(),
       type: 'custom',
-      position: { x: 200, y: 150 },
+      position: { 
+        x: 250 + (Math.random() * 100 - 50), 
+        y: 200 + (Math.random() * 100 - 50) 
+      },
       data: {
-        label: nodeName,
+        label: finalName,
         value: 0,
         rate: 10,
         capacity: 100,
-        overloadThreshold: 80,
+        overload_threshold: 80,
         overloaded: false,
         locked: false
       }
@@ -161,13 +170,31 @@ function FlowApp() {
   }
 
   const updateNode = (id: string, newData: any) => {
-    setNodes(nodes =>
-      nodes.map(n =>
+    setNodes(currentNodes => {
+      const updatedNodes = currentNodes.map(n =>
         n.id === id
           ? { ...n, data: { ...n.data, ...newData } }
           : n
-      )
-    )
+      );
+
+      // If the user clicked "Resume Simulation", push the new circuit and restart engine!
+      if (newData.locked === false) {
+        fetch(`${BACKEND_URL}/api/projects/${PROJECT_ID}`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}` 
+          },
+          body: JSON.stringify({ nodes: updatedNodes, edges })
+        }).then(() => {
+          // FORCE the backend engine to restart and grab the new rate/capacity
+          socket.emit('stop_simulation', PROJECT_ID);
+          setTimeout(() => socket.emit('start_simulation', PROJECT_ID), 100);
+        }).catch(err => console.error("Failed to sync to backend:", err));
+      }
+
+      return updatedNodes;
+    });
   }
 
   // =============================
@@ -196,8 +223,6 @@ function FlowApp() {
   const resetCircuit = () => {
     setNodes([])
     setEdges([])
-    setSelectedNode(null)
-    setSelectedEdge(null)
     setHistory([])
     setIsRunning(false)
   }
@@ -218,22 +243,43 @@ function FlowApp() {
         <div className="ml-auto flex gap-3">
 
           <button
-            onClick={() => setIsRunning(true)}
-            className="bg-green-600 px-3 py-1 rounded"
+            onClick={() => socket.emit('start_simulation', PROJECT_ID)}
+            className="bg-green-600 px-3 py-1 rounded hover:bg-green-500 transition"
           >
             Play
           </button>
 
           <button
-            onClick={() => setIsRunning(false)}
-            className="bg-yellow-600 px-3 py-1 rounded"
+            onClick={async () => {
+              if (!token) {
+                alert("You are not logged in!");
+                return;
+              }
+              await fetch(`http://localhost:5000/api/projects/${PROJECT_ID}`, {
+                method: 'PUT',
+                headers: { 
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}` 
+                },
+                body: JSON.stringify({ nodes, edges })
+              });
+              alert("Circuit Saved to Database!");
+            }}
+            className="bg-blue-600 px-3 py-1 rounded border border-blue-400 hover:bg-blue-500 transition"
+          >
+            Save Circuit
+          </button>
+
+          <button
+            onClick={() => socket.emit('stop_simulation', PROJECT_ID)}
+            className="bg-yellow-600 px-3 py-1 rounded hover:bg-yellow-500 transition"
           >
             Pause
           </button>
 
           <button
             onClick={resetSimulation}
-            className="bg-purple-600 px-3 py-1 rounded"
+            className="bg-purple-600 px-3 py-1 rounded hover:bg-purple-500 transition"
           >
             Reset Simulation
           </button>
@@ -244,14 +290,14 @@ function FlowApp() {
                 resetCircuit()
               }
             }}
-            className="bg-red-700 px-3 py-1 rounded"
+            className="bg-red-700 px-3 py-1 rounded hover:bg-red-600 transition"
           >
             Reset Circuit
           </button>
 
           <button
             onClick={() => setShowAnalytics(!showAnalytics)}
-            className="bg-blue-600 px-3 py-1 rounded"
+            className="bg-blue-600 px-3 py-1 rounded hover:bg-blue-500 transition"
           >
             Toggle Analytics
           </button>
@@ -269,26 +315,26 @@ function FlowApp() {
             value={nodeName}
             onChange={(e) => setNodeName(e.target.value)}
             placeholder="Create node..."
-            className="w-full p-2 bg-gray-800 rounded"
+            className="w-full p-2 bg-gray-800 rounded outline-none border border-gray-700 focus:border-blue-500"
           />
 
           <button
             onClick={createNode}
-            className="w-full bg-blue-600 p-2 rounded"
+            className="w-full bg-blue-600 p-2 rounded hover:bg-blue-500 transition"
           >
             Add Node
           </button>
 
           <button
             onClick={deleteNode}
-            className="w-full bg-red-600 p-2 rounded"
+            className="w-full bg-red-600 p-2 rounded hover:bg-red-500 transition"
           >
             Delete Node
           </button>
 
           <button
             onClick={deleteEdge}
-            className="w-full bg-red-500 p-2 rounded"
+            className="w-full bg-red-500 p-2 rounded hover:bg-red-400 transition"
           >
             Delete Edge
           </button>
@@ -303,8 +349,6 @@ function FlowApp() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
-            onNodeClick={(e, node) => setSelectedNode(node)}
-            onEdgeClick={(e, edge) => setSelectedEdge(edge)}
             nodeTypes={nodeTypes}
           >
             <Background gap={16} size={1} color="#374151" />
@@ -322,13 +366,10 @@ function FlowApp() {
       {/* ANALYTICS */}
       {showAnalytics && (
         <div className="h-56 border-t border-gray-800 bg-gray-900/80 p-3 space-y-2 backdrop-blur">
-
           <MetricsPanel nodes={nodes} />
-
           <div className="h-32">
             <ChartPanel data={history} />
           </div>
-
         </div>
       )}
 
@@ -338,8 +379,21 @@ function FlowApp() {
 
 export default function App() {
   return (
-    <ReactFlowProvider>
-      <FlowApp />
-    </ReactFlowProvider>
-  )
+    <Router>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        
+        {/* The dynamic canvas route */}
+        <Route path="/canvas/:id" element={
+          <ReactFlowProvider>
+            <FlowApp />
+          </ReactFlowProvider>
+        } />
+        
+        {/* Default fallback */}
+        <Route path="*" element={<Navigate to="/login" />} />
+      </Routes>
+    </Router>
+  );
 }

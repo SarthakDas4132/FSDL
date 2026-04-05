@@ -1,0 +1,26 @@
+{
+  "name": "fsdl-mini-project",
+  "version": "1.0.0",
+  "description": "��#\u0000 \u0000F\u0000S\u0000D\u0000L\u0000\r\u0000 \u0000",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "server": "npm run dev --prefix systemforge-server",
+    "client": "npm run dev --prefix systemforge-frontend-share",
+    "dev": "concurrently \"npm run server\" \"npm run client\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SarthakDas4132/FSDL.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SarthakDas4132/FSDL/issues"
+  },
+  "homepage": "https://github.com/SarthakDas4132/FSDL#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

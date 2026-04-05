@@ -9,67 +9,76 @@ const startSimulation = async (io, projectId) => {
 
   console.log(`Initializing simulation engine for project: ${projectId}`);
 
-  // Fetch the current saved state of the canvas
-  const project = await Project.findById(projectId);
-  if (!project) return console.log('Project not found for simulation');
-
-  // Load the nodes and edges into memory for fast calculation
-  let nodes = JSON.parse(JSON.stringify(project.nodes));
-  let edges = JSON.parse(JSON.stringify(project.edges));
-
-  const TICK_RATE = 1000; // 1 second per tick (simulation day)
-
-  // Start the mathematical loop!
-  activeSimulations[projectId] = setInterval(() => {
+  try {
+    // Fetch the current saved state of the canvas
+    const project = await Project.findById(projectId);
     
-    // --- 1. GENERATION PHASE ---
-    // If a node is a 'factory' (source), it generates resources every tick
-    nodes.forEach(node => {
-      if (node.type === 'factory') {
-        node.data.currentLoad += node.data.processingRate;
-        // Cap it at max capacity
-        if (node.data.currentLoad > node.data.maxCapacity) {
-          node.data.currentLoad = node.data.maxCapacity;
+    // CRITICAL SAFETY CHECK
+    if (!project || !project.nodes || project.nodes.length === 0) {
+      console.log('No nodes found in DB! Please save the circuit first.');
+      return; 
+    }
+
+    // Load the nodes and edges into memory for fast calculation
+    let nodes = JSON.parse(JSON.stringify(project.nodes));
+    let edges = JSON.parse(JSON.stringify(project.edges));
+
+    const TICK_RATE = 1000; // 1 second per tick
+
+    // Start the mathematical loop
+    activeSimulations[projectId] = setInterval(() => {
+      
+      // --- 1. GENERATION PHASE ---
+      nodes.forEach(node => {
+        // Only run math if the node is NOT locked manually by the user
+        if (!node.data.locked) {
+          // Increase value by the rate
+          node.data.value += node.data.rate;
+          
+          // Cap it at max capacity
+          if (node.data.value > node.data.capacity) {
+            node.data.value = node.data.capacity;
+          }
+
+          // Set overload status for the frontend to turn red
+          node.data.overloaded = node.data.value >= node.data.overload_threshold;
         }
-      }
-    });
+      });
 
-    // --- 2. TRANSFER PHASE ---
-    // Move resources along the edges (pipes)
-    edges.forEach(edge => {
-      const source = nodes.find(n => n.id === edge.source);
-      const target = nodes.find(n => n.id === edge.target);
+      // --- 2. TRANSFER PHASE (Edges) ---
+      edges.forEach(edge => {
+        const source = nodes.find(n => n.id === edge.source);
+        const target = nodes.find(n => n.id === edge.target);
 
-      // If both nodes exist and the source has resources to give
-      if (source && target && source.data.currentLoad > 0) {
-        
-        // The core math: How much can actually flow?
-        const availableSpaceInTarget = target.data.maxCapacity - target.data.currentLoad;
-        const flowAmount = Math.min(
-          source.data.currentLoad, // What the source has available
-          edge.data.maxFlow,       // The limit of the pipe/edge
-          availableSpaceInTarget   // What the target can actually fit
-        );
+        // If both nodes exist and the source has value to give
+        if (source && target && source.data.value > 0 && !source.data.locked) {
+          
+          // Calculate flow physics
+          const availableSpaceInTarget = target.data.capacity - target.data.value;
+          const flowAmount = Math.min(
+            source.data.value,       // What the source has
+            10,                      // Edge flow speed limit
+            availableSpaceInTarget   // What the target can fit
+          );
 
-        // Move the resources
-        source.data.currentLoad -= flowAmount;
-        target.data.currentLoad += flowAmount;
-        edge.data.currentFlow = flowAmount; // For the frontend to animate the line
+          // Move the resources
+          source.data.value -= flowAmount;
+          target.data.value += flowAmount;
+        }
+      });
 
-      } else {
-        edge.data.currentFlow = 0; // Turn off animation if empty
-      }
-    });
+      // --- 3. BROADCAST PHASE ---
+      io.to(projectId).emit('tick_update', { 
+        time: new Date(),
+        nodes, 
+        edges 
+      });
 
-    // --- 3. BROADCAST PHASE ---
-    // Send the freshly calculated state only to users viewing this specific project
-    io.to(projectId).emit('tick_update', { 
-      time: new Date(),
-      nodes, 
-      edges 
-    });
+    }, TICK_RATE);
 
-  }, TICK_RATE);
+  } catch (err) {
+    console.error("Simulation Engine Error:", err);
+  }
 };
 
 const stopSimulation = (projectId) => {
@@ -77,8 +86,6 @@ const stopSimulation = (projectId) => {
     clearInterval(activeSimulations[projectId]);
     delete activeSimulations[projectId];
     console.log(`Halted simulation engine for project: ${projectId}`);
-    
-    // Optional for later: Save the final state back to MongoDB here
   }
 };
 

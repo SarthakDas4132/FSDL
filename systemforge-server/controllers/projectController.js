@@ -53,22 +53,29 @@ exports.getProjectById = async (req, res) => {
 // @route   PUT /api/projects/:id
 exports.updateProject = async (req, res) => {
   try {
-    const { nodes, edges } = req.body;
+    const { name, description, nodes, edges } = req.body;
+    
+    // Find the project and update it with the incoming arrays
+    const updatedProject = await Project.findByIdAndUpdate(
+      req.params.id,
+      { 
+        $set: { 
+          name, 
+          description, 
+          nodes: nodes || [], 
+          edges: edges || [] 
+        } 
+      },
+      { new: true } // Return the updated document
+    );
 
-    const project = await Project.findById(req.params.id);
-
-    if (!project) {
+    if (!updatedProject) {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    // Update the project with the new React Flow data
-    project.nodes = nodes || project.nodes;
-    project.edges = edges || project.edges;
-
-    const updatedProject = await project.save();
-
-    res.status(200).json(updatedProject);
+    res.json(updatedProject);
   } catch (error) {
-    res.status(500).json({ message: 'Server Error', error: error.message });
+    console.error("Error saving project:", error);
+    res.status(500).json({ message: 'Server Error' });
   }
 };
