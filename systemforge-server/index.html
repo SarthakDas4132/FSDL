@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SystemForge Engine Test</title>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <style>
+        body { font-family: monospace; background: #1e1e1e; color: #00ff00; padding: 20px; }
+        #logs { white-space: pre-wrap; margin-top: 20px; }
+        button { padding: 10px 20px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>SystemForge Engine Connection Test</h2>
+    <button id="startBtn">Start Simulation</button>
+    <button id="stopBtn">Stop Simulation</button>
+    
+    <div id="logs">Waiting for connection...</div>
+
+    <script>
+        // Connect to your local backend
+        const socket = io('http://localhost:5000');
+        const logsDiv = document.getElementById('logs');
+        
+        // PASTE YOUR POSTMAN PROJECT ID HERE
+        const PROJECT_ID = '69d10aa395ba0d7995545fd9'; 
+
+        function log(message) {
+            logsDiv.innerHTML = message + '\n\n' + logsDiv.innerHTML;
+        }
+
+        socket.on('connect', () => {
+            log(`🟢 Connected to Server! Socket ID: ${socket.id}`);
+            // Tell the server we are looking at this specific project
+            socket.emit('join_project', PROJECT_ID);
+        });
+
+        document.getElementById('startBtn').onclick = () => {
+            log(`🚀 Sending Start Command...`);
+            socket.emit('start_simulation', PROJECT_ID);
+        };
+
+        document.getElementById('stopBtn').onclick = () => {
+            log(`🛑 Sending Stop Command...`);
+            socket.emit('stop_simulation', PROJECT_ID);
+        };
+
+        // THIS IS WHERE THE MAGIC HAPPENS
+        // We listen for the math engine to send us data every second
+        socket.on('tick_update', (data) => {
+            const factory = data.nodes.find(n => n.type === 'factory');
+            const warehouse = data.nodes.find(n => n.type === 'warehouse');
+            const edge = data.edges[0];
+
+            log(`[TICK: ${new Date(data.time).toLocaleTimeString()}]
+🏭 Factory Load: ${factory.data.currentLoad} / ${factory.data.maxCapacity}
+📦 Warehouse Load: ${warehouse.data.currentLoad} / ${warehouse.data.maxCapacity}
+🌊 Flowing on Edge: ${edge.data.currentFlow} items/sec
+-----------------------------------------`);
+        });
+    </script>
+</body>
+</html>
