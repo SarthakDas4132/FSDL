@@ -1,6 +1,4 @@
-﻿Folder PATH listing for volume New Volume
-Volume serial number is DBDE-31B0
-D:.
+﻿
 ª   package-lock.json
 ª   package.json
 ª   README.md
